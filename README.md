@@ -156,9 +156,21 @@ $migrator->migrate();
 
 Beiträge sind willkommen! Bitte erstellen Sie ein Issue oder einen Pull Request auf GitHub.
 
+## Autor
+
+**Friends Of REDAXO**
+
+* http://www.redaxo.org
+* https://github.com/FriendsOfREDAXO
+
+**Projektleitung**
+
+[Thomas Skerbis](https://github.com/skerbis)
+
+
 ## Lizenz
 
-[MIT License](https://opensource.org/licenses/MIT)
+MIT
 
 
 
