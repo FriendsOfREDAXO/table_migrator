@@ -1,156 +1,254 @@
-# Table_Migrator for REDAXO
+# TableMigrator for REDAXO
 
-# TableMigrator
+**Version 2.0** – Fluent-API zur Migration von Daten zwischen REDAXO-Datenbanktabellen.
 
-`TableMigrator` ist eine PHP-Klasse, die entwickelt wurde, um die Migration von Daten zwischen Datenbanktabellen zu erleichtern. Sie bietet eine flexible und erweiterbare Lösung für die Übertragung von Daten aus einer alten Tabellenstruktur in eine neue, mit Unterstützung für verschiedene Arten von Feldmappings und Datenverarbeitung.
+## Features
 
-## Funktionen
-
-- Einfaches Mapping von Feldern zwischen alter und neuer Tabelle
-- Kombinieren mehrerer Felder in ein neues Feld
-- Verarbeiten von Feldinhalten während der Migration
-- Herstellen von Beziehungen zu verwandten Tabellen
-- Automatisches Einfügen von migrierten Daten in die neue Tabelle
+- Einfaches 1:1-Feldmapping
+- Felder kombinieren (mehrere Quellfelder → ein Zielfeld)
+- Felder transformieren (Callback-Verarbeitung)
+- Fremdschlüssel über YForm-Relations auflösen
+- **Neu: Statisches Mapping** – fixer Wert für alle migrierten Zeilen
+- **Neu: Chunk-Verarbeitung** – speicherschonende Migration großer Tabellen
+- **Neu: Dry-Run-Modus** – Testlauf ohne DB-Schreibzugriff
+- Fehler-Tracking mit detailliertem Stats-Array
 
 ## Installation
 
-Fügen Sie die `TableMigrator`-Klasse zu Ihrem REDAXO-Projekt hinzu. Stellen Sie sicher, dass sie im Namespace `klxm\migrator` liegt.
+Das AddOn im REDAXO-Installer installieren. Klassen werden automatisch via REDAXO-Autoloader bereitgestellt.
 
 ## Verwendung
 
-### Grundlegende Verwendung
+### Grundlegendes Mapping
 
 ```php
-use klxm\migrator\TableMigrator;
+use FriendsOfREDAXO\TableMigrator\TableMigrator;
 
 $migrator = new TableMigrator('old_table', 'new_table');
-$migrator->addMapping('new_field', 'old_field')
-         ->migrate();
+$stats = $migrator
+    ->addMapping('id', 'user_id')
+    ->addMapping('email', 'email_address')
+    ->migrate();
+
+echo "Migriert: {$stats['migrated']} / {$stats['total']}";
 ```
 
-### Erweiterte Mappings
+### Alle Mapping-Typen im Überblick
 
 ```php
-// Kombiniertes Mapping
-$migrator->addCombinedMapping('full_name', ['first_name', 'last_name'], 
-    function($firstName, $lastName) {
-        return $firstName . ' ' . $lastName;
-    }
+use FriendsOfREDAXO\TableMigrator\TableMigrator;
+
+$migrator = new TableMigrator('old_table', 'new_table');
+
+// 1:1-Mapping
+$migrator->addMapping('new_field', 'old_field');
+
+// Mehrere Felder kombinieren
+$migrator->addCombinedMapping('full_name', ['first_name', 'last_name'],
+    fn($first, $last) => trim($first . ' ' . $last)
 );
 
-// Verarbeitetes Mapping
-$migrator->addProcessedMapping('description', 'old_description', 
-    function($text) {
-        return $migrator->truncateAndStripHTML($text, 200);
-    }
+// Feldwert transformieren
+$migrator->addProcessedMapping('description', 'old_text',
+    fn($text) => $migrator->truncateAndStripHTML($text, 300)
 );
 
-// Verwandtes Mapping
-$migrator->addRelatedMapping('category_name', 'category_id', 'rex_categories', 'name', 'Uncategorized');
+// Fremdschlüssel über YForm-Dataset auflösen
+$migrator->addRelatedMapping('location', 'location_id', 'rex_locations', 'name', 'Unbekannt');
+
+// Fixer Wert für alle Zeilen (NEU in 2.0)
+$migrator->addStaticMapping('status', 1);
+$migrator->addStaticMapping('migrated_at', date('Y-m-d H:i:s'));
+$migrator->addStaticMapping('source', 'migration_2026');
+
+// Wertetabelle (Lookup-Map, NEU in 2.1)
+$migrator->addConditionalMapping('status', 'old_status', [
+    'active'   => 1,
+    'inactive' => 0,
+    'pending'  => 2,
+], 0); // Fallback-Wert
+
+// Migration starten
+$stats = $migrator->migrate();
 ```
 
-### Durchführen der Migration
+### Dry-Run-Modus (neu in 2.2)
 
-Nach dem Einrichten aller Mappings, führen Sie die Migration durch:
+`dryRun()` führt alle Mappings und Transformationen vollständig aus – erkennt also Fehler in
+der Konfiguration – schreibt aber keinen einzigen INSERT in die Zieltabelle.
+Perfekt zum Validieren vor dem echten Produktionslauf.
 
 ```php
-$migrator->migrate();
+$migrator = new TableMigrator('old_table', 'new_table');
+$migrator
+    ->addMapping('title', 'headline')
+    ->addConditionalMapping('status', 'state', ['active' => 1, 'draft' => 0], 0)
+    ->addStaticMapping('migrated_at', date('Y-m-d H:i:s'));
+
+// Testlauf – DB bleibt unberührt
+$stats = $migrator->dryRun()->migrate();
+
+if ($stats['skipped'] > 0) {
+    foreach ($stats['errors'] as $err) {
+        dump($err['error'], $err['row']);
+    }
+} else {
+    // Alles OK – jetzt scharf migrieren
+    $stats = $migrator->dryRun(false)->migrate();
+}
 ```
 
-## Methoden
+### Conditional Mapping / Lookup-Tabelle (neu in 2.1)
 
-- `addMapping($newField, $oldField)`: Einfaches Feldmapping
-- `addCombinedMapping($newField, $oldFields, $combineFunction)`: Kombiniert mehrere Felder
-- `addProcessedMapping($newField, $oldField, $processFunction)`: Verarbeitet Feldinhalte
-- `addRelatedMapping($newField, $oldField, $relatedTable, $relatedField, $defaultValue)`: Stellt Beziehungen her
-- `migrate()`: Führt die Migration durch
-- `truncateAndStripHTML($text, $maxLength)`: Hilfsmethode zum Kürzen und Bereinigen von HTML
-
-## Beispiele
-
-### Benutzertabelle Migration
+`addConditionalMapping()` übersetzt Quellwerte anhand einer Lookup-Map in Zielwerte.
+Ideal wenn Enum-Werte, Status-Codes oder numerische IDs sich zwischen Alt- und Neusystem unterscheiden.
+Ein optionaler Fallback-Wert greift, wenn kein Eintrag in der Map passt.
 
 ```php
-$migrator = new TableMigrator('old_users', 'new_users');
-$migrator->addMapping('id', 'user_id')
-         ->addMapping('email', 'email_address')
-         ->addProcessedMapping('password', 'password_hash', function($value) {
-             return password_hash($value, PASSWORD_DEFAULT);
-         })
-         ->addCombinedMapping('full_name', ['first_name', 'last_name'], function($first, $last) {
-             return $first . ' ' . $last;
-         });
-$migrator->migrate();
+$migrator = new TableMigrator('old_articles', 'new_articles');
+$migrator
+    ->addMapping('title', 'headline')
+    // Status-Strings → Integer
+    ->addConditionalMapping('status', 'publish_state', [
+        'published' => 1,
+        'draft'     => 0,
+        'archived'  => 2,
+    ], 0) // Fallback: 0
+    // Alte Kategorie-IDs → neue Kategorie-IDs
+    ->addConditionalMapping('category_id', 'cat', [
+        10 => 1,
+        11 => 1,
+        20 => 3,
+        21 => 3,
+    ], null);
+
+$stats = $migrator->migrate();
 ```
 
-### Produktkatalog Migration
+### Statisches Mapping (neu in 2.0)
+
+`addStaticMapping()` setzt für **jede migrierte Zeile** einen fixen Wert – unabhängig von der Quelltabelle.
+Typische Anwendungsfälle: Status-Flags, Erstellungszeitstempel, Migrations-Kennzeichen.
 
 ```php
 $migrator = new TableMigrator('old_products', 'new_products');
-$migrator->addMapping('id', 'product_id')
-         ->addMapping('name', 'product_name')
-         ->addProcessedMapping('price', 'price_cents', function($value) {
-             return $value * 100;
-         })
-         ->addCombinedMapping('full_sku', ['sku_prefix', 'sku_number'], function($prefix, $number) {
-             return $prefix . '-' . str_pad($number, 5, '0', STR_PAD_LEFT);
-         });
-$migrator->migrate();
+$migrator
+    ->addMapping('name', 'product_name')
+    ->addMapping('price', 'price_cents')
+    ->addStaticMapping('status', 1)                             // Alle auf "aktiv"
+    ->addStaticMapping('created_at', date('Y-m-d H:i:s'))      // Erstellungsdatum
+    ->addStaticMapping('data_source', 'legacy_import_2026');    // Herkunftskennzeichen
+
+$stats = $migrator->migrate();
 ```
 
-## Praxis-Beispiel hier aus einer FORcal-Tabelle: 
+### Chunk-Verarbeitung für große Tabellen (neu in 2.0)
 
-> Hinweis: die Wiederholungsregeln können nicht übernommen werden.  
+`migrateChunked()` liest die Quelltabelle in konfigurierbaren Blöcken – ideal bei Tabellen mit
+Tausenden von Zeilen, bei denen ein vollständiges `SELECT *` den PHP-Speicher erschöpfen würde.
+Fehler einzelner Zeilen brechen die gesamte Migration nicht ab.
 
 ```php
-// Usage
-$migrator = new TableMigratorx('rex_forcal_entries', 'rex_yformcalendar');
-$migrator->addMapping('name', 'name_1')
-    ->addProcessedMapping('description', 'text_1', function($text) use ($migrator) {
-        return $migrator->truncateAndStripHTML($text);
-    })
-    ->addRelatedMapping('location', 'awoloc', 'rex_orte', 'name')
+$migrator = new TableMigrator('rex_huge_legacy_table', 'rex_new_table');
+$migrator
+    ->addMapping('title', 'name')
+    ->addProcessedMapping('body', 'content', fn($t) => strip_tags($t))
+    ->addStaticMapping('status', 1);
 
-    ->addCombinedMapping('dtstart', ['start_date', 'start_time'], function($date, $time) {
-        return $date . ' ' . $time;
-    })
-    ->addCombinedMapping('dtend', ['end_date', 'end_time'], function($date, $time) {
-        return $date . ' ' . $time;
-    })
-    ->addProcessedMapping('all_day', 'full_time', function($value) {
-        return $value === null ? 0 : ($value ? 1 : 0);
-    })
-    ->addMapping('categories', 'category');
-        // Fields that couldn't be directly mapped:
-        // ->addMapping('createdate', 'createdate')
-        // ->addMapping('updatedate', 'updatedate')
-        // ->addMapping('created_by', 'createuser')
-        // ->addMapping('updated_by', 'updateuser')
-        // ->addMapping('status', 'status')
-        // ->addMapping('teaser', 'teaser_1')
-        // ->addMapping('image', 'image')
-        // ->addMapping('file', 'file')
-        // ->addMapping('lang', 'lang_1')
-        // ->addMapping('category_id', 'category')
-        // ->addMapping('location_id', 'venue')
-$migrator->migrate();
-?>
+// 200 Zeilen pro Chunk (Standard: 500)
+$stats = $migrator->migrateChunked(200);
 
+echo "Gesamt:    {$stats['total']}\n";
+echo "Migriert:  {$stats['migrated']}\n";
+echo "Fehler:    {$stats['skipped']}\n";
+
+foreach ($stats['errors'] as $err) {
+    echo "Fehler bei ID " . ($err['row']['id'] ?? '?') . ": " . $err['error'] . "\n";
+}
 ```
 
+### Rückgabewert von `migrate()` und `migrateChunked()`
 
+Beide Methoden geben ein assoziatives Array zurück:
 
+| Schlüssel  | Typ    | Bedeutung                                           |
+|------------|--------|-----------------------------------------------------|
+| `total`    | int    | Gesamtzahl der gefundenen Quellzeilen               |
+| `migrated` | int    | Erfolgreich eingefügte Zeilen                       |
+| `skipped`  | int    | Übersprungene Zeilen (Fehler)                       |
+| `errors`   | array  | Liste von `['row' => [...], 'error' => '...']`      |
+
+## Methoden-Referenz
+
+| Methode | Beschreibung |
+|---------|-------------|
+| `addMapping(string $new, string $old)` | Einfaches 1:1-Feldmapping |
+| `addCombinedMapping(string $new, array $oldFields, callable $fn)` | Mehrere Felder zusammenführen |
+| `addProcessedMapping(string $new, string $old, callable $fn)` | Feldwert transformieren |
+| `addRelatedMapping(string $new, string $old, string $table, string $field, string $default)` | YForm-Relation auflösen |
+| `addStaticMapping(string $new, mixed $value)` | Fixen Wert für alle Zeilen setzen |
+| `addConditionalMapping(string $new, string $old, array $valueMap, mixed $default)` | Wert per Lookup-Tabelle übersetzen |
+| `dryRun(bool $on = true): self` | Dry-Run-Modus aktivieren (kein DB-Insert) |
+| `migrate(): array` | Migration in einem Schritt (kleine Tabellen) |
+| `migrateChunked(int $chunkSize = 500): array` | Chunk-Verarbeitung (große Tabellen) |
+| `truncateAndStripHTML(string $text, int $maxLength = 256): string` | HTML entfernen und kürzen |
+
+## Praxis-Beispiel: FORcal → YForm-Calendar
+
+> Hinweis: Wiederholungsregeln können nicht automatisch übernommen werden.
+
+```php
+use FriendsOfREDAXO\TableMigrator\TableMigrator;
+
+$migrator = new TableMigrator('rex_forcal_entries', 'rex_yformcalendar');
+$migrator
+    ->addMapping('name', 'name_1')
+    ->addProcessedMapping('description', 'text_1',
+        fn($text) => $migrator->truncateAndStripHTML($text)
+    )
+    ->addRelatedMapping('location', 'awoloc', 'rex_orte', 'name')
+    ->addCombinedMapping('dtstart', ['start_date', 'start_time'],
+        fn($date, $time) => $date . ' ' . $time
+    )
+    ->addCombinedMapping('dtend', ['end_date', 'end_time'],
+        fn($date, $time) => $date . ' ' . $time
+    )
+    ->addProcessedMapping('all_day', 'full_time',
+        fn($v) => $v === null ? 0 : ($v ? 1 : 0)
+    )
+    ->addMapping('categories', 'category')
+    ->addStaticMapping('migrated_at', date('Y-m-d H:i:s'))
+    ->addStaticMapping('status', 1);
+
+$stats = $migrator->migrateChunked(100);
+echo "Migration abgeschlossen: {$stats['migrated']}/{$stats['total']} Einträge.";
+```
 
 ## Hinweise
 
-- Stellen Sie sicher, dass die Zieltabelle bereits existiert und die korrekten Felder enthält.
-- Testen Sie die Migration zuerst in einer Entwicklungsumgebung, bevor Sie sie auf Produktionsdaten anwenden.
+- Die Zieltabelle muss bereits existieren und alle Zielfelder enthalten.
+- Migration zuerst in einer Entwicklungsumgebung testen.
+- Fehler-Debugging: `foreach ($stats['errors'] as $e) { error_log($e['error']); }`
+- Namespace seit v2.0: `FriendsOfREDAXO\TableMigrator`
 
-## ToDo
+## Changelog
 
-- Implementierung von Fehlerbehandlung und Logging
-- Hinzufügen von Unterstützung für Batch-Verarbeitung bei großen Datenmengen
-- Erweiterung um Funktionen zum Rückgängigmachen von Migrationen
+### 2.2.0
+
+- **Neu:** `dryRun()` – Testlauf ohne DB-Schreibzugriff; Mappings und Transformationen werden vollständig ausgeführt
+
+### 2.1.0
+
+- **Neu:** `addConditionalMapping()` – Wertübersetzung per Lookup-Tabelle (Enum/Status/ID-Mapping)
+
+### 2.0.0
+
+- Namespace von `klxm\migrator` auf `FriendsOfREDAXO\TableMigrator` umgestellt
+- **Neu:** `addStaticMapping()` – fixer Wert für alle Zeilen
+- **Neu:** `migrateChunked()` – speicherschonende Chunk-Verarbeitung mit Fehler-Tracking
+- `migrate()` gibt jetzt ein Stats-Array zurück statt `echo` (Breaking Change)
+- Vollständige PHP 8.1+ Typisierung und PHPDoc
+- `error_log()` durch `rex_logger::logException()` ersetzt
 
 ## Beitrag
 
@@ -160,13 +258,10 @@ Beiträge sind willkommen! Bitte erstellen Sie ein Issue oder einen Pull Request
 
 **Friends Of REDAXO**
 
-* http://www.redaxo.org
-* https://github.com/FriendsOfREDAXO
+- https://www.redaxo.org
+- https://github.com/FriendsOfREDAXO
 
-**Projektleitung**
-
-[Thomas Skerbis](https://github.com/skerbis)
-
+**Projektleitung:** [Thomas Skerbis](https://github.com/skerbis)
 
 ## Lizenz
 
