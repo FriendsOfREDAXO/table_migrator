@@ -13,6 +13,21 @@
 - **Neu: Dry-Run-Modus** – Testlauf ohne DB-Schreibzugriff
 - Fehler-Tracking mit detailliertem Stats-Array
 
+## Migration von Version 1.x auf 2.x
+
+> **Breaking Change:** `migrate()` gibt seit v2.0 ein `array` zurück statt eine Erfolgsmeldung per `echo` auszugeben.
+> Außerdem wurde der Namespace von `klxm\migrator` auf `FriendsOfREDAXO\TableMigrator` geändert.
+>
+> ```php
+> // Alt (1.x)
+> use klxm\migrator\TableMigrator;
+> $migrator->migrate(); // gab "Migration abgeschlossen!" aus
+>
+> // Neu (2.x)
+> use FriendsOfREDAXO\TableMigrator\TableMigrator;
+> $stats = $migrator->migrate(); // gibt ['total' => ..., 'migrated' => ..., ...] zurück
+> ```
+
 ## Installation
 
 Das AddOn im REDAXO-Installer installieren. Klassen werden automatisch via REDAXO-Autoloader bereitgestellt.
